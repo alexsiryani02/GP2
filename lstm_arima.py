@@ -5,6 +5,7 @@ import yfinance as yf
 from datetime import date, timedelta, datetime
 import streamlit as st
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import roc_auc_score, roc_curve
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
@@ -31,17 +32,26 @@ inp = st.text_input('Enter Stock Ticker', 'AAPL')
 if not inp.strip():
     st.error("Error: The stock ticker cannot be blank. Please enter a valid stock ticker.")
 else:
-    start = '2022-05-10'
     end = date.today()
     
     try:
         # Fetching all data using yfinance 
-        data = yf.download(inp, start=start, end=end)
-        if data.empty:
+        data_all = yf.download(inp, end=end)
+        if data_all.empty:
             st.error("Error: The stock ticker is incorrect or data is not available for the given ticker.")
         else:
-            data.reset_index(inplace=True)
-            data.rename(columns={'Adj Close': 'Adj_Close'}, inplace=True) 
+            data_all.reset_index(inplace=True)
+            data_all.rename(columns={'Adj Close': 'Adj_Close'}, inplace=True) 
+
+            # Determine the start date based on the data length
+            total_years = (data_all['Date'].iloc[-1] - data_all['Date'].iloc[0]).days / 365
+            if total_years > 5:
+                start = end - timedelta(days=4*365)
+            else:
+                start = end - timedelta(days=2*365)
+
+            # Filter the data for the specified date range
+            data = data_all[data_all['Date'] >= pd.to_datetime(start)]
 
             # Preparing data and checking if in date time, and sorting date
             data['Date'] = pd.to_datetime(data['Date'])
@@ -64,7 +74,7 @@ else:
                 history = list(train)
                 predictions = []
                 for t in range(len(test)):
-                    model = ARIMA(history, order=(1, 1, 1))
+                    model = ARIMA(history, order=(2, 1, 1))
                     model_fit = model.fit()
                     output = model_fit.forecast()
                     yhat = output[0]
@@ -152,11 +162,6 @@ else:
             lstm_pred = model.predict(latest_data)
             lstm_pred = scaler.inverse_transform(lstm_pred)
 
-            # Calculate metrics for LSTM
-            lstm_rmse = math.sqrt(mean_squared_error(test_data_aligned, test_predict.flatten()))
-            lstm_mae = mean_absolute_error(test_data_aligned, test_predict.flatten())
-            lstm_mape = np.mean(np.abs((test_data_aligned - test_predict.flatten()) / test_data_aligned)) * 100
-
             # Get actual live price
             live_data = yf.download(inp, period="1d", interval="1m")
             actual_price = live_data['Close'].iloc[-1]
@@ -165,26 +170,39 @@ else:
             if abs(arima_predictions[-1] - actual_price) < abs(lstm_pred[0, 0] - actual_price):
                 best_model = "ARIMA"
                 best_pred = arima_predictions[-1]
-                best_rmse = arima_rmse
-                best_mae = arima_mae
-                best_mape = arima_mape
                 data['Best_Predict'] = np.nan
                 data.iloc[-len(arima_predictions):, data.columns.get_loc('Best_Predict')] = arima_predictions
             else:
                 best_model = "LSTM"
                 best_pred = lstm_pred[0, 0]
-                best_rmse = lstm_rmse
-                best_mae = lstm_mae
-                best_mape = lstm_mape
                 data['Best_Predict'] = data['Test_Predict']
+
+            # Determine buy/sell recommendation
+            recommendation = "Our prediction model shows that the predicted price of the stock is equal to the current actual price. This indicates that there is no expected change in the stock's value in the near future. In this case, we recommend you hold onto your stock, as there is no anticipated movement that would warrant buying or selling at this time. However, please note that prediction models aren't always accurate due to sudden market changes, so this is only a recommendation."
+            if best_pred > actual_price:
+                recommendation = "Our prediction model indicates that the predicted price of the stock is higher than the current actual price. This suggests a potential increase in the stock's value. Based on this information, we recommend you consider buying the stock, as it is expected to appreciate, potentially offering you a profitable investment opportunity. However, please note that prediction models aren't always accurate due to sudden market changes, so this is only a recommendation."
+            elif best_pred < actual_price:
+                recommendation = "According to our prediction model, the predicted price of the stock is lower than the current actual price. This implies a potential decrease in the stock's value. Therefore, we advise you to consider selling the stock to avoid potential losses. Selling now could help you preserve your capital and avoid a decrease in your investment's value. However, please note that prediction models aren't always accurate due to sudden market changes, so this is only a recommendation."
+
+            # Calculate binary classification metrics (up or down)
+            data['Actual_Direction'] = data['Close'].diff().apply(lambda x: 1 if x > 0 else 0)
+            data['Predicted_Direction'] = data['Best_Predict'].diff().apply(lambda x: 1 if x > 0 else 0)
+
+            # Ensure alignment for classification metrics
+            valid_indices = ~data['Predicted_Direction'].isna() & ~data['Actual_Direction'].isna()
+            actual_direction = data.loc[valid_indices, 'Actual_Direction']
+            predicted_direction = data.loc[valid_indices, 'Predicted_Direction']
+
+            auc_roc = roc_auc_score(actual_direction, predicted_direction)
 
             # Display results
             st.subheader(f"Best Model: {best_model}")
             st.write(f"Predicted share price for {inp} today by {best_model} is ${best_pred:.2f}")
             st.write(f"Actual live price for {inp} is ${actual_price:.2f}")
+            
 
             # Plotting the closing trend
-            st.subheader("Closing Trend")
+            st.subheader(f"Closing Trend for {inp}")
             fig1, ax1 = plt.subplots()
             ax1.plot(data['Date'], data['Close'], label='Close Price')
             ax1.set_xlabel('Date')
@@ -193,24 +211,24 @@ else:
             st.pyplot(fig1)
 
             # Plotting the predicted trend based on the best model
-            st.subheader("Predicted Trend")
+            st.subheader(f"Predicted Trend for {inp}")
             fig2, ax2 = plt.subplots()
             ax2.plot(data['Date'], data['Close'], label='Actual Close Price')
-            ax2.plot(data['Date'], data['Best_Predict'], label=f'{best_model} Predicted Close Price')
             ax2.set_xlabel('Date')
             ax2.set_ylabel('Price')
             ax2.legend()
             st.pyplot(fig2)
 
             # Plotting the zoomed-in plot of the last 30 days
-            st.subheader("Last 30 Days Prediction vs Actual")
+            st.subheader(f"Last 30 Days Prediction vs Actual for {inp}")
             fig3, ax3 = plt.subplots()
             ax3.plot(data['Date'].iloc[-30:], data['Close'].iloc[-30:], label='Actual Close Price')
-            ax3.plot(data['Date'].iloc[-30:], data['Best_Predict'].iloc[-30:], label=f'{best_model} Predicted Close Price')
             ax3.set_xlabel('Date')
             ax3.set_ylabel('Price')
             ax3.legend()
             st.pyplot(fig3)
+
+            st.write(f"Recommendation for {inp}: {recommendation}")
 
     except Exception as e:
         st.error(f"An error occurred: {e}")
