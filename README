@@ -5,8 +5,9 @@ When opening Colab, you should write the following commands in the main.ipynb:
 The first line is for installing Streamlit.
 The second line is for setting your password for the website (IP address).
 The third line is for running the app.
-Before executing the third command, you should create a file in the 'Files' section called 'lstm_arima.py'. 
-Copy the code written in lstm_arima.py into this file.
+
+Before executing the third command, you should create a file in the 'Files' section called 'lstm_arima.py', Copy the code 
+written in lstm_arima.py into this file.
 
 After creating the file, run the third command. This will provide you with two URLs. After approximately 20 seconds, 
 a third URL will be generated.
@@ -16,4 +17,5 @@ You should use the third URL by clicking on it, which will lead you to a new web
 Use the password you set with the second command. After entering the password, the website will start running.
 
 It will take almost 45-60 seconds to start. Once running, the stock AAPL will be predicted using LSTM and the ARIMA model. 
+
 Then, you can search for any stock ticker you want, ty for example (MSFT or TSLA)
