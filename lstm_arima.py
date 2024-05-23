@@ -19,13 +19,13 @@ np.random.seed(42)
 tf.random.set_seed(42)
 random.seed(42)
 
-# Applying a dark background style
+# Applying a dark background style for better visualization
 plt.style.use('dark_background')
 
 st.title("StockViews")
 st.subheader("Stock Trend Prediction with Hybrid Model (LSTM + ARIMA)")
 
-# Asks the user to input stock ticker
+# User inputs the stock ticker symbol
 inp = st.text_input('Enter Stock Ticker', 'AAPL')
 
 if not inp.strip():
@@ -34,8 +34,12 @@ if not inp.strip():
 
 end = date.today()
 
-# Fetching all data using yfinance
-data_all = yf.download(inp, end=end)
+@st.cache_data
+def fetch_data(ticker, end_date):
+    return yf.download(ticker, end=end_date)
+
+# Fetching historical data using the cached function
+data_all = fetch_data(inp, end)
 if data_all.empty:
     st.error("Error: The stock ticker is incorrect or data is not available for the given ticker.")
     st.stop()
@@ -43,7 +47,7 @@ if data_all.empty:
 data_all.reset_index(inplace=True)
 data_all.rename(columns={'Adj Close': 'Adj_Close'}, inplace=True)
 
-# Determine the start date based on the data length
+# Determine the start date based on the data length (up to 4 years for longer series)
 total_years = (data_all['Date'].iloc[-1] - data_all['Date'].iloc[0]).days / 365
 if total_years > 5:
     start = end - timedelta(days=4*365)
@@ -53,11 +57,11 @@ else:
 # Filter the data for the specified date range
 data = data_all[data_all['Date'] >= pd.to_datetime(start)]
 
-# Preparing data and checking if in date time, and sorting date
+# Prepare data by ensuring the dates are in datetime format and sorted
 data['Date'] = pd.to_datetime(data['Date'])
 data = data.sort_values(by=['Date'])
 
-# ARIMA analysis function
+# Function for ARIMA analysis
 def ARIMA_ALGO(df, quote):
     df['Date'] = pd.to_datetime(df.index)
     Quantity_date = df[['Close', 'Date']]
@@ -70,7 +74,7 @@ def ARIMA_ALGO(df, quote):
     size = int(len(quantity) * 0.80)
     train, test = quantity[0:size], quantity[size:]
 
-    # ARIMA model
+    # ARIMA model setup and forecasting
     history = list(train)
     predictions = []
     for t in range(len(test)):
@@ -88,18 +92,19 @@ def ARIMA_ALGO(df, quote):
 
     return predictions, test, rmse, mae, mape
 
-# Running ARIMA model
+# Running ARIMA model and getting predictions
 arima_predictions, arima_test, arima_rmse, arima_mae, arima_mape = ARIMA_ALGO(data, inp)
 
-# Normalizing the data for LSTM
+# Normalizing the data for LSTM model
 scaler = MinMaxScaler(feature_range=(0, 1))
 scaled_data = scaler.fit_transform(data[['Close']])
 
-# Creating the training and testing dataset
+# Creating training and testing datasets
 train_data_len = int(len(scaled_data) * 0.8)
 train_data = scaled_data[:train_data_len]
 test_data = scaled_data[train_data_len:]
 
+# Function to create datasets with specified time steps
 def create_dataset(dataset, time_step=1):
     X, y = [], []
     for i in range(len(dataset) - time_step):
@@ -112,11 +117,11 @@ time_step = 60
 X_train, y_train = create_dataset(train_data, time_step)
 X_test, y_test = create_dataset(test_data, time_step)
 
-# Reshape input
+# Reshape input for LSTM
 X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
 X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
 
-# Build the LSTM model with specified hyperparameters
+# Build the LSTM model
 def build_model():
     model = Sequential()
     model.add(LSTM(units=416, return_sequences=True, input_shape=(time_step, 1)))
@@ -127,18 +132,18 @@ def build_model():
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001), loss='mean_squared_error')
     return model
 
-# Define early stopping
+# Define early stopping to prevent overfitting
 early_stop = EarlyStopping(monitor='val_loss', patience=10)
 
-# Train the model with the specified hyperparameters
+# Train the LSTM model
 model = build_model()
 history = model.fit(X_train, y_train, batch_size=32, epochs=200, verbose=1, validation_split=0.2, callbacks=[early_stop])
 
-# Predicting with LSTM
+# Making predictions with the LSTM model
 train_predict = model.predict(X_train)
 test_predict = model.predict(X_test)
 
-# Transform back to original form
+# Transform predictions back to original scale
 train_predict = scaler.inverse_transform(train_predict)
 test_predict = scaler.inverse_transform(test_predict)
 
@@ -156,7 +161,7 @@ test_predict_len = len(test_predict)
 data.iloc[time_step:time_step + train_predict_len, data.columns.get_loc('Train_Predict')] = train_predict.flatten()
 data.iloc[train_data_len + time_step:train_data_len + time_step + test_predict_len, data.columns.get_loc('Test_Predict')] = test_predict.flatten()
 
-# Running LSTM model
+# Predicting the latest data point with LSTM
 latest_data = test_data[-time_step:]
 latest_data = latest_data.reshape((1, time_step, 1))
 lstm_pred = model.predict(latest_data)
@@ -166,7 +171,7 @@ lstm_pred = scaler.inverse_transform(lstm_pred)
 live_data = yf.download(inp, period="1d", interval="1m")
 actual_price = live_data['Close'].iloc[-1]
 
-# Compare ARIMA and LSTM predictions
+# Compare ARIMA and LSTM predictions to determine the best model
 if abs(arima_predictions[-1] - actual_price) < abs(lstm_pred[0, 0] - actual_price):
     best_model = "ARIMA"
     best_pred = arima_predictions[-1]
@@ -177,23 +182,12 @@ else:
     best_pred = lstm_pred[0, 0]
     data['Best_Predict'] = data['Test_Predict']
 
-# Determine buy/sell recommendation
+# Generate a buy/sell recommendation based on predictions
 recommendation = "Our prediction model shows that the predicted price of the stock is equal to the current actual price. This indicates that there is no expected change in the stock's value in the near future. In this case, we recommend you hold onto your stock, as there is no anticipated movement that would warrant buying or selling at this time. However, please note that prediction models aren't always accurate due to sudden market changes, so this is only a recommendation."
 if best_pred > actual_price:
     recommendation = "Our prediction model indicates that the predicted price of the stock is higher than the current actual price. This suggests a potential increase in the stock's value. Based on this information, we recommend you consider buying the stock, as it is expected to appreciate, potentially offering you a profitable investment opportunity. However, please note that prediction models aren't always accurate due to sudden market changes, so this is only a recommendation."
 elif best_pred < actual_price:
     recommendation = "According to our prediction model, the predicted price of the stock is lower than the current actual price. This implies a potential decrease in the stock's value. Therefore, we advise you to consider selling the stock to avoid potential losses. Selling now could help you preserve your capital and avoid a decrease in your investment's value. However, please note that prediction models aren't always accurate due to sudden market changes, so this is only a recommendation."
-
-# Calculate binary classification metrics (up or down)
-data['Actual_Direction'] = data['Close'].diff().apply(lambda x: 1 if x > 0 else 0)
-data['Predicted_Direction'] = data['Best_Predict'].diff().apply(lambda x: 1 if x > 0 else 0)
-
-# Ensure alignment for classification metrics
-valid_indices = ~data['Predicted_Direction'].isna() & ~data['Actual_Direction'].isna()
-actual_direction = data.loc[valid_indices, 'Actual_Direction']
-predicted_direction = data.loc[valid_indices, 'Predicted_Direction']
-
-auc_roc = roc_auc_score(actual_direction, predicted_direction)
 
 # Display results
 st.subheader(f"Best Model: {best_model}")
@@ -233,18 +227,3 @@ ax3.legend()
 st.pyplot(fig3)
 
 st.write(f"Recommendation for {inp}: {recommendation}")
-
-# Calculate and print MSE for every 32 batch
-def calculate_batch_mse(y_true, y_pred, batch_size=32):
-    for i in range(0, len(y_true), batch_size):
-        end = i + batch_size
-        batch_y_true = y_true[i:end]
-        batch_y_pred = y_pred[i:end]
-        mse = mean_squared_error(batch_y_true, batch_y_pred)
-        print(f"Batch {i // batch_size + 1}: MSE = {mse}")
-
-# Calculate MSE for train and test sets
-print("Train MSE by batch:")
-calculate_batch_mse(y_train, train_predict.flatten())
-print("Test MSE by batch:")
-calculate_batch_mse(y_test, test_predict.flatten())
