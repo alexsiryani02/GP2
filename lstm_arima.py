@@ -5,15 +5,14 @@ import yfinance as yf
 from datetime import date, timedelta
 import streamlit as st
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, mean_squared_error, mean_absolute_error
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
 import tensorflow as tf
 import random
-from statsmodels.tsa.arima.model import ARIMA
-from sklearn.metrics import mean_squared_error, mean_absolute_error
 import math
+from statsmodels.tsa.arima.model import ARIMA
 
 # Set seeds for reproducibility
 np.random.seed(42)
@@ -234,3 +233,18 @@ ax3.legend()
 st.pyplot(fig3)
 
 st.write(f"Recommendation for {inp}: {recommendation}")
+
+# Calculate and print MSE for every 32 batch
+def calculate_batch_mse(y_true, y_pred, batch_size=32):
+    for i in range(0, len(y_true), batch_size):
+        end = i + batch_size
+        batch_y_true = y_true[i:end]
+        batch_y_pred = y_pred[i:end]
+        mse = mean_squared_error(batch_y_true, batch_y_pred)
+        print(f"Batch {i // batch_size + 1}: MSE = {mse}")
+
+# Calculate MSE for train and test sets
+print("Train MSE by batch:")
+calculate_batch_mse(y_train, train_predict.flatten())
+print("Test MSE by batch:")
+calculate_batch_mse(y_test, test_predict.flatten())
