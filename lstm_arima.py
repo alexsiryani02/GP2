@@ -5,7 +5,7 @@ import yfinance as yf
 from datetime import date, timedelta
 import streamlit as st
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import roc_auc_score, mean_squared_error, mean_absolute_error
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
@@ -63,16 +63,14 @@ data = data.sort_values(by=['Date'])
 
 # Function for ARIMA analysis
 def ARIMA_ALGO(df, quote):
-    df['Date'] = pd.to_datetime(df.index)
-    Quantity_date = df[['Close', 'Date']]
-    Quantity_date.index = Quantity_date['Date']
+    df.set_index('Date', inplace=True)
+    Quantity_date = df[['Close']]
     Quantity_date['Close'] = Quantity_date['Close'].astype(float)
-    Quantity_date = Quantity_date.drop(['Date'], axis=1)
 
     # Prepare training and testing data for the ARIMA model
     quantity = Quantity_date['Close'].values
     size = int(len(quantity) * 0.80)
-    train, test = quantity[0:size], quantity[size:]
+    train, test = quantity[:size], quantity[size:]
 
     # ARIMA model setup and forecasting
     history = list(train)
@@ -93,7 +91,7 @@ def ARIMA_ALGO(df, quote):
     return predictions, test, rmse, mae, mape
 
 # Running ARIMA model and getting predictions
-arima_predictions, arima_test, arima_rmse, arima_mae, arima_mape = ARIMA_ALGO(data, inp)
+arima_predictions, arima_test, arima_rmse, arima_mae, arima_mape = ARIMA_ALGO(data.copy(), inp)
 
 # Normalizing the data for LSTM model
 scaler = MinMaxScaler(feature_range=(0, 1))
