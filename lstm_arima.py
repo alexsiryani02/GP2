@@ -1,3 +1,4 @@
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -122,12 +123,12 @@ X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
 # Build the LSTM model
 def build_model():
     model = Sequential()
-    model.add(LSTM(units=416, return_sequences=True, input_shape=(time_step, 1)))
-    model.add(LSTM(units=352, return_sequences=False))
-    model.add(Dropout(rate=0.2))
-    model.add(Dense(units=112))
+    model.add(LSTM(units=96, return_sequences=True, input_shape=(time_step, 1)))
+    model.add(LSTM(units=416, return_sequences=False))
+    model.add(Dropout(rate=0.3))
+    model.add(Dense(units=288))
     model.add(Dense(1))
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001), loss='mean_squared_error')
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.002567442256450226), loss='mean_squared_error')
     return model
 
 # Define early stopping to prevent overfitting
