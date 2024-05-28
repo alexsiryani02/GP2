@@ -1,4 +1,3 @@
-
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,7 +12,7 @@ from tensorflow.keras.callbacks import EarlyStopping
 import tensorflow as tf
 import random
 import math
-from statsmodels.tsa.arima.model import ARIMA
+import pmdarima as pm
 
 # Set seeds for reproducibility
 np.random.seed(42)
@@ -62,8 +61,12 @@ data = data_all[data_all['Date'] >= pd.to_datetime(start)]
 data['Date'] = pd.to_datetime(data['Date'])
 data = data.sort_values(by=['Date'])
 
-# Function for ARIMA analysis
-def ARIMA_ALGO(df, quote):
+# Adding Previous_Close feature
+data['Previous_Close'] = data['Close'].shift(1)
+data.dropna(inplace=True)  # Remove any rows with NaN values
+
+# Function for ARIMA analysis with automatic parameter selection
+def ARIMA_ALGO(df):
     df.set_index('Date', inplace=True)
     Quantity_date = df[['Close']]
     Quantity_date['Close'] = Quantity_date['Close'].astype(float)
@@ -73,30 +76,45 @@ def ARIMA_ALGO(df, quote):
     size = int(len(quantity) * 0.80)
     train, test = quantity[:size], quantity[size:]
 
-    # ARIMA model setup and forecasting
+    # Automatic ARIMA model selection
+    model = pm.auto_arima(
+        train,                        # Training data
+        seasonal=False,               # Non-seasonal model
+        stepwise=True,                # Stepwise search to reduce computational cost
+        suppress_warnings=True,       # Suppress warnings during model fitting
+        error_action='ignore',        # Ignore errors during fitting
+        trace=True                    # Print model selection steps
+    )
+    
+    print(f"Selected ARIMA Model: {model.summary()}")  # Print the model summary
+
+    # Forecasting
     history = list(train)
     predictions = []
     for t in range(len(test)):
-        model = ARIMA(history, order=(2, 1, 1))
-        model_fit = model.fit()
-        output = model_fit.forecast()
+        model_fit = model.fit(history)  # Fit the model with the current history
+        output = model_fit.predict(n_periods=1)  # Predict the next value
         yhat = output[0]
         predictions.append(yhat)
-        history.append(test[t])
+        history.append(test[t])  # Update history with the true value
 
     # Calculate error metrics
-    rmse = math.sqrt(mean_squared_error(test, predictions))
+    mse = mean_squared_error(test, predictions)
+    rmse = math.sqrt(mse)
     mae = mean_absolute_error(test, predictions)
     mape = np.mean(np.abs((test - predictions) / test)) * 100
 
-    return predictions, test, rmse, mae, mape
+    return predictions, test, mse, rmse, mae, mape
 
 # Running ARIMA model and getting predictions
-arima_predictions, arima_test, arima_rmse, arima_mae, arima_mape = ARIMA_ALGO(data.copy(), inp)
+arima_predictions, arima_test, arima_mse, arima_rmse, arima_mae, arima_mape = ARIMA_ALGO(data.copy())
+
+# Selecting features for LSTM model
+features = ['Close', 'High', 'Low', 'Adj_Close', 'Volume', 'Previous_Close']
 
 # Normalizing the data for LSTM model
 scaler = MinMaxScaler(feature_range=(0, 1))
-scaled_data = scaler.fit_transform(data[['Close']])
+scaled_data = scaler.fit_transform(data[features])
 
 # Creating training and testing datasets
 train_data_len = int(len(scaled_data) * 0.8)
@@ -107,9 +125,8 @@ test_data = scaled_data[train_data_len:]
 def create_dataset(dataset, time_step=1):
     X, y = [], []
     for i in range(len(dataset) - time_step):
-        a = dataset[i:(i + time_step), 0]
-        X.append(a)
-        y.append(dataset[i + time_step, 0])
+        X.append(dataset[i:(i + time_step)])
+        y.append(dataset[i + time_step, 0])  # Predicting the 'Close' price
     return np.array(X), np.array(y)
 
 time_step = 60  
@@ -117,13 +134,13 @@ X_train, y_train = create_dataset(train_data, time_step)
 X_test, y_test = create_dataset(test_data, time_step)
 
 # Reshape input for LSTM
-X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
-X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], X_train.shape[2])
+X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], X_test.shape[2])
 
 # Build the LSTM model
 def build_model():
     model = Sequential()
-    model.add(LSTM(units=96, return_sequences=True, input_shape=(time_step, 1)))
+    model.add(LSTM(units=96, return_sequences=True, input_shape=(time_step, len(features))))
     model.add(LSTM(units=416, return_sequences=False))
     model.add(Dropout(rate=0.3))
     model.add(Dense(units=288))
@@ -143,17 +160,13 @@ train_predict = model.predict(X_train)
 test_predict = model.predict(X_test)
 
 # Transform predictions back to original scale
-train_predict = scaler.inverse_transform(train_predict)
-test_predict = scaler.inverse_transform(test_predict)
-
-# Ensure test data is aligned with predictions for LSTM
-test_data_aligned = test_data[time_step:].flatten()  
+train_predict = scaler.inverse_transform(np.concatenate((train_predict, np.zeros((train_predict.shape[0], len(features) - 1))), axis=1))[:, 0]
+test_predict = scaler.inverse_transform(np.concatenate((test_predict, np.zeros((test_predict.shape[0], len(features) - 1))), axis=1))[:, 0]
 
 # Adding predictions to the data
 data['Train_Predict'] = np.nan
 data['Test_Predict'] = np.nan
 
-# Ensure the lengths match when inserting predictions
 train_predict_len = len(train_predict)
 test_predict_len = len(test_predict)
 
@@ -162,23 +175,23 @@ data.iloc[train_data_len + time_step:train_data_len + time_step + test_predict_l
 
 # Predicting the latest data point with LSTM
 latest_data = test_data[-time_step:]
-latest_data = latest_data.reshape((1, time_step, 1))
+latest_data = latest_data.reshape((1, time_step, len(features)))
 lstm_pred = model.predict(latest_data)
-lstm_pred = scaler.inverse_transform(lstm_pred)
+lstm_pred = scaler.inverse_transform(np.concatenate((lstm_pred, np.zeros((lstm_pred.shape[0], len(features) - 1))), axis=1))[:, 0]
 
 # Get actual live price
 live_data = yf.download(inp, period="1d", interval="1m")
 actual_price = live_data['Close'].iloc[-1]
 
 # Compare ARIMA and LSTM predictions to determine the best model
-if abs(arima_predictions[-1] - actual_price) < abs(lstm_pred[0, 0] - actual_price):
+if abs(arima_predictions[-1] - actual_price) < abs(lstm_pred[0] - actual_price):
     best_model = "ARIMA"
     best_pred = arima_predictions[-1]
     data['Best_Predict'] = np.nan
     data.iloc[-len(arima_predictions):, data.columns.get_loc('Best_Predict')] = arima_predictions
 else:
     best_model = "LSTM"
-    best_pred = lstm_pred[0, 0]
+    best_pred = lstm_pred[0]
     data['Best_Predict'] = data['Test_Predict']
 
 # Generate a buy/sell recommendation based on predictions
@@ -192,6 +205,7 @@ elif best_pred < actual_price:
 st.subheader(f"Best Model: {best_model}")
 st.write(f"Predicted share price for {inp} today by {best_model} is ${best_pred:.2f}")
 st.write(f"Actual live price for {inp} is ${actual_price:.2f}")
+
 
 # Plotting the closing price trend
 st.subheader(f"Closing Price Trend for {inp}")
